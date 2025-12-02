@@ -44,6 +44,7 @@ interface LeafletMapProps {
     reviewData?: any
   ) => Promise<void>;
   userLocation?: Position | null;
+  lastUpdate?: number;
 }
 
 interface MapControllerProps {
@@ -132,7 +133,6 @@ function MapController({
     
     if (lastSelectedId === id) return;
     
-    console.log("Abrindo popup para:", establishment.name);
     setLastSelectedId(id);
 
     map.flyTo([lat, lng], 17, {
@@ -396,10 +396,12 @@ export default function LeafletMap({
   onCloseAddModal,
   onSubmitAddModal,
   userLocation,
+  lastUpdate,
 }: LeafletMapProps) {
   const mapRef = useRef<L.Map | null>(null);
   const [isMapReady, setIsMapReady] = useState(false);
   const [localShowAddModal, setLocalShowAddModal] = useState(false);
+  const [markersKey, setMarkersKey] = useState(0);
 
   useEffect(() => {
     const handleReviewRequest = (event: Event) => {
@@ -443,8 +445,13 @@ export default function LeafletMap({
   }, [showAddModal]);
 
   useEffect(() => {
+    if (lastUpdate) {
+      setMarkersKey(prev => prev + 1);
+    }
+  }, [lastUpdate]);
+
+  useEffect(() => {
     if (isMapReady && mapRef.current) {
-      console.log("Mapa pronto e configurado");
     }
   }, [isMapReady]);
 
@@ -593,7 +600,7 @@ export default function LeafletMap({
           />
         )}
 
-        <MarkerClusterGroup {...clusterOptions}>
+        <MarkerClusterGroup {...clusterOptions} key={markersKey}>
           {establishments.map((establishment: Establishment) => {
             const { id, lat, lng, name, address, final_score, reviews_count, has_water, has_bathroom, has_power } = establishment;
             
@@ -610,7 +617,7 @@ export default function LeafletMap({
 
             return (
               <Marker
-                key={id}
+                key={`${id}-${lastUpdate}`}
                 position={[lat, lng]}
                 icon={markerIcon}
                 data-establishment-id={id}

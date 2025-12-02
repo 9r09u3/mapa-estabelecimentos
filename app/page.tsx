@@ -105,6 +105,7 @@ export default function Page() {
   const [suggestions, setSuggestions] = useState<Establishment[]>([]);
   const [searchExpanded, setSearchExpanded] = useState(false);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [searchTimeout, setSearchTimeout] = useState<NodeJS.Timeout | null>(null);
 
   const [filters, setFilters] = useState<Filters>({ 
     has_water: false, 
@@ -117,6 +118,7 @@ export default function Page() {
   const [reviewTarget, setReviewTarget] = useState<string | null>(null);
   const [selectedEstablishment, setSelectedEstablishment] = useState<Establishment | null>(null);
   const [searchResultEstablishment, setSearchResultEstablishment] = useState<Establishment | null>(null);
+  const [lastUpdate, setLastUpdate] = useState<number>(Date.now());
 
   useEffect(() => {
     if (tab === "map" && navigator.geolocation) {
@@ -173,14 +175,56 @@ export default function Page() {
       });
 
       setEstablishments(enriched);
+      setLastUpdate(Date.now());
     } catch (error) {
       console.error("Erro ao carregar dados:", error);
     }
   }
 
   useEffect(() => { 
-    loadAll(); 
+    loadAll();
+    
+    const establishmentChannel = supabase
+      .channel('establishments-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'establishments'
+        },
+        () => {
+          loadAll();
+        }
+      )
+      .subscribe();
+    
+    const pendingChannel = supabase
+      .channel('pending-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'pending_establishments'
+        },
+        () => {
+          loadAll();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(establishmentChannel);
+      supabase.removeChannel(pendingChannel);
+    };
   }, []);
+
+  useEffect(() => {
+    if (tab === "map") {
+      loadAll();
+    }
+  }, [tab]);
 
   useEffect(() => {
     const q = (searchQuery || "").trim().toLowerCase();
@@ -190,8 +234,41 @@ export default function Page() {
       return;
     }
 
-    const s = establishments.filter(e => e.name?.toLowerCase().includes(q));
-    setSuggestions(s.slice(0, 8));
+    if (searchTimeout) clearTimeout(searchTimeout);
+
+    const localResults = establishments.filter(e => 
+      e.name?.toLowerCase().includes(q)
+    ).slice(0, 8);
+
+    setSuggestions(localResults);
+
+    if (localResults.length > 0) {
+      setSearchResultEstablishment(localResults[0]);
+      return;
+    }
+
+    const timeout = setTimeout(async () => {
+      try {
+        const { data, error } = await supabase
+          .from("establishments")
+          .select("*")
+          .ilike("name", `%${q}%`)
+          .limit(5);
+
+        if (!error && data && data.length > 0) {
+          setSuggestions(data);
+          setSearchResultEstablishment(data[0]);
+        }
+      } catch (error) {
+        console.error("Erro na busca:", error);
+      }
+    }, 600);
+
+    setSearchTimeout(timeout);
+
+    return () => {
+      if (searchTimeout) clearTimeout(searchTimeout);
+    };
   }, [searchQuery, establishments]);
 
   const handleSuggestionClick = useCallback((establishment: Establishment) => {
@@ -235,19 +312,16 @@ export default function Page() {
   };
 
   const handleViewReviews = useCallback((establishmentId: string) => {
-    console.log("Abrindo ver avaliações para:", establishmentId);
     setReviewTarget(establishmentId);
     setReviewViewMode('reviews');
   }, []);
 
   const handleRequestReview = useCallback((establishmentId: string) => {
-    console.log("Abrindo nova avaliação para:", establishmentId);
     setReviewTarget(establishmentId);
     setReviewViewMode('form');
   }, []);
 
   const handleCloseReviewPanel = useCallback(() => {
-    console.log("Fechando ReviewPanel, resetando modo para 'form'");
     setReviewTarget(null);
     setReviewViewMode('form');
   }, []);
@@ -270,8 +344,6 @@ export default function Page() {
     }
 
     try {
-      console.log("Iniciando envio do estabelecimento...");
-      
       const pendingData = {
         name: name.trim(),
         address: address ? address.trim().slice(0, 200) : "",
@@ -283,8 +355,6 @@ export default function Page() {
         submitted_by: "public"
       };
 
-      console.log("Dados do estabelecimento:", pendingData);
-
       const { data: establishmentData, error: establishmentError } = await supabase
         .from("pending_establishments")
         .insert([pendingData])
@@ -292,15 +362,10 @@ export default function Page() {
         .single();
 
       if (establishmentError) {
-        console.error("Erro ao inserir estabelecimento:", establishmentError);
         throw new Error(`Erro no estabelecimento: ${establishmentError.message}`);
       }
 
-      console.log("Estabelecimento inserido com sucesso:", establishmentData);
-
       if (wantToReview && reviewData) {
-        console.log("Preparando para enviar review...");
-        
         if (!reviewData.service_rating || reviewData.service_rating === 0) {
           alert("Estabelecimento enviado, mas a avaliação precisa de uma classificação com estrelas.");
           setSelectedPoint(null);
@@ -322,17 +387,13 @@ export default function Page() {
           moderator_note: `pending_establishment_id:${establishmentData.id}`
         };
 
-        console.log("Dados da review:", reviewPayload);
-
         const { error: reviewError } = await supabase
           .from("reviews")
           .insert([reviewPayload]);
 
         if (reviewError) {
-          console.error("Erro ao inserir review:", reviewError);
           alert("Estabelecimento enviado para moderação, mas houve um erro ao enviar a avaliação.");
         } else {
-          console.log("Review inserida com sucesso");
           alert("Obrigado! Estabelecimento e avaliação enviados para moderação.");
         }
       } else {
@@ -344,7 +405,6 @@ export default function Page() {
       loadAll();
       
     } catch (error: any) {
-      console.error("Erro detalhado no processo:", error);
       alert(`Erro ao enviar: ${error.message || "Tente novamente."}`);
     }
   };
@@ -356,9 +416,6 @@ export default function Page() {
     }
 
     try {
-      console.log("Iniciando envio da review...");
-      console.log("Dados recebidos:", formData);
-      
       if (!formData.service_rating || formData.service_rating === 0) {
         alert("Por favor, avalie o atendimento com as estrelas.");
         return;
@@ -377,25 +434,20 @@ export default function Page() {
         approved: false
       };
 
-      console.log("Payload da review:", payload);
-
       const { error } = await supabase
         .from("reviews")
         .insert([payload]);
 
       if (error) {
-        console.error("Erro do Supabase:", error);
         alert(`Erro ao enviar avaliação: ${error.message}`);
         return;
       }
 
-      console.log("Review enviada com sucesso!");
       alert("Avaliação enviada para moderação!");
       setReviewTarget(null);
       loadAll();
       
     } catch (error: any) {
-      console.error("Erro inesperado:", error);
       alert(`Erro inesperado: ${error.message || "Tente novamente."}`);
     }
   };
@@ -725,6 +777,7 @@ export default function Page() {
             onCloseAddModal={handleCloseAddModal}
             onSubmitAddModal={submitPendingEstablishmentAndOptionalReview}
             userLocation={userLocation}
+            lastUpdate={lastUpdate}
           />
         </>
       )}
