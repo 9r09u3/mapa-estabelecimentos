@@ -31,13 +31,30 @@ export default function RankingList({ establishments = [], reviews = [] }: any) 
     return { ...e, final_score: avg, reviews_count: arr.length };
   });
 
-  const sorted = enriched.slice().sort((a:any,b:any)=> (a.final_score ?? 9999) - (b.final_score ?? 9999));
+  // Ordena do menor para o maior (piores primeiros)
+  const sorted = enriched.slice().sort((a:any,b:any)=> {
+    // Trata null como 9999 para que estabelecimentos sem avaliação fiquem no final
+    const scoreA = a.final_score ?? 9999;
+    const scoreB = b.final_score ?? 9999;
+    return scoreA - scoreB;
+  });
+
+  // Pega apenas os 10 primeiros (piores)
+  const top10Worst = sorted.slice(0, 10);
 
   return (
     <div style={{ padding:16, paddingBottom:120 }}>
       <h2 style={{ marginTop:0 }}>Ranking — Piores estabelecimentos</h2>
-      {sorted.length === 0 && <div className="small">Sem estabelecimentos cadastrados.</div>}
-      {sorted.map((e:any)=>(
+      {top10Worst.length === 0 && <div className="small">Sem estabelecimentos cadastrados.</div>}
+      
+      {/* Opcional: mostrar mensagem se houver menos de 10 estabelecimentos */}
+      {top10Worst.length < 10 && top10Worst.length > 0 && (
+        <div className="small" style={{ marginBottom: 12 }}>
+          Mostrando {top10Worst.length} estabelecimento(s) disponível(is)
+        </div>
+      )}
+      
+      {top10Worst.map((e:any)=>(
         <div key={e.id} className="card" style={{ marginTop:12 }}>
           <div style={{ display:"flex", justifyContent:"space-between" }}>
             <div>

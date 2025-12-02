@@ -1,12 +1,11 @@
-// app/api/admin/verify-admin/route.ts
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
-// 🔒 LISTA SEGURA DE ADMINS - Configure no .env.local
 const ADMIN_EMAILS = process.env.ADMIN_EMAILS?.split(',') || [];
 
-export async function POST(req: Request) {
+export async function POST(request: NextRequest) {
   try {
-    const { email } = await req.json();
+    const body = await request.json();
+    const { email } = body;
     
     if (!email) {
       return NextResponse.json({ 
@@ -15,15 +14,12 @@ export async function POST(req: Request) {
       }, { status: 400 });
     }
 
-    // 🔒 VALIDAÇÃO SEGURA - Verificar contra lista fixa
     const isAdmin = ADMIN_EMAILS.includes(email.trim().toLowerCase());
     
-    // 🔒 LOG DE TENTATIVAS (em produção, salvar em banco de logs)
     console.log(`Tentativa de verificação admin: ${email} - ${isAdmin ? 'APROVADO' : 'NEGADO'}`);
 
     return NextResponse.json({ 
       isAdmin,
-      // Não revele quais emails são admins mesmo em sucesso
       message: isAdmin ? "Email verificado" : "Acesso negado"
     });
 
@@ -35,3 +31,5 @@ export async function POST(req: Request) {
     }, { status: 500 });
   }
 }
+
+export {};

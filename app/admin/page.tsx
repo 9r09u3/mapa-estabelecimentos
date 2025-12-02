@@ -1,4 +1,3 @@
-// app/admin/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -8,9 +7,13 @@ export default function AdminPage() {
   const [user, setUser] = useState<any>(null);
   const [pendingEsts, setPendingEsts] = useState<any[]>([]);
   const [pendingRvs, setPendingRvs] = useState<any[]>([]);
-  const [tab, setTab] = useState<"establishments"|"reviews">("establishments");
+  const [tab, setTab] = useState<"establishments"|"reviews"|"search">("establishments");
   const [loading, setLoading] = useState(false);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [editingEst, setEditingEst] = useState<any>(null);
 
   useEffect(()=>{
     checkAndSetUser();
@@ -20,7 +23,6 @@ export default function AdminPage() {
     return () => sub.subscription.unsubscribe();
   },[]);
 
-  // 🔒 FUNÇÃO CRÍTICA - Verifica se usuário é admin com mais validações
   async function checkAndSetUser(sessionUser?: any) {
     const userToCheck = sessionUser || (await supabase.auth.getSession()).data.session?.user;
     
@@ -29,7 +31,6 @@ export default function AdminPage() {
       return;
     }
 
-    // 🔒 VALIDAÇÃO ADICIONAL: Verificar se o email está presente
     if (!userToCheck.email) {
       console.warn('Usuário sem email tentou acessar admin');
       await supabase.auth.signOut();
@@ -37,7 +38,6 @@ export default function AdminPage() {
       return;
     }
 
-    // 🔒 VERIFICAR SE O EMAIL É ADMIN
     try {
       const response = await fetch('/api/admin/verify-admin', {
         method: 'POST',
@@ -47,7 +47,6 @@ export default function AdminPage() {
         body: JSON.stringify({ email: userToCheck.email })
       });
 
-      // 🔒 VERIFICAR SE A RESPOSTA É VÁLIDA
       if (!response.ok) {
         throw new Error('Erro na verificação de admin');
       }
@@ -61,7 +60,6 @@ export default function AdminPage() {
         await supabase.auth.signOut();
         setUser(null);
         
-        // 🔒 Mensagem genérica sem revelar detalhes
         if (typeof window !== 'undefined') {
           alert("Acesso não autorizado.");
         }
@@ -76,19 +74,17 @@ export default function AdminPage() {
       }
     }
   }
-  // 🔒 FUNÇÃO DE LOGIN SEGURA - Só envia magic link para admins
+
   async function signIn() {
     const email = prompt("Email do admin:");
     if (!email) return;
     
-    // Validação básica de email
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       alert("Por favor, insira um email válido.");
       return;
     }
 
     try {
-      // 🔒 VERIFICAR SE É ADMIN ANTES DE ENVIAR MAGIC LINK
       const response = await fetch('/api/admin/verify-admin', {
         method: 'POST',
         headers: {
@@ -99,13 +95,11 @@ export default function AdminPage() {
 
       const result = await response.json();
       
-      // 🔒 CRÍTICO: Só envia magic link se for admin
       if (!result.isAdmin) {
-        alert("Se este email estiver cadastrado como administrador, você receberá um link de acesso em alguns instantes. Verifique sua caixa de entrada e spam.");
+        alert("Link de acesso enviado para seu email. Verifique sua caixa de entrada.");
         return;
       }
 
-      // 🔒 Só enviar magic link para emails autorizados
       const { error } = await supabase.auth.signInWithOtp({ 
         email,
         options: {
@@ -131,7 +125,6 @@ export default function AdminPage() {
     setUser(null); 
   }
 
-  // 🔒 CARREGAMENTO SEGURO DE DADOS PENDENTES
   async function loadPending(){
     if (!user) return;
     
@@ -169,18 +162,89 @@ export default function AdminPage() {
     } 
   }, [user]);
 
-  // 🔒 FUNÇÃO SEGURA PARA APROVAR ESTABELECIMENTO
+  // NOVA FUNÇÃO: Aprovar todos os estabelecimentos de uma vez
+  async function approveAllEsts() {
+    if (!pendingEsts.length) {
+      alert("Não há estabelecimentos para aprovar.");
+      return;
+    }
+    
+    if(!confirm(`Deseja aprovar todos os ${pendingEsts.length} estabelecimentos pendentes?`)) return;
+    
+    setActionInProgress("approve-all-ests");
+    
+    try {
+      const response = await fetch('/api/admin/approve-establishments-bulk', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${user.id}`
+        },
+        body: JSON.stringify({ 
+          pendingIds: pendingEsts.map(p => p.id),
+          userEmail: user.email 
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Erro na requisição');
+      }
+
+      const result = await response.json();
+      
+      if (result.success) {
+        setPendingEsts([]);
+        alert(`✅ Aprovados ${result.approvedCount} estabelecimentos.${result.errorCount > 0 ? ` Falhas: ${result.errorCount}` : ''}`);
+      } else {
+        alert("Erro ao aprovar estabelecimentos: " + (result.error || "Erro desconhecido"));
+      }
+    } catch (error) {
+      console.error("Erro ao aprovar todos os estabelecimentos:", error);
+      alert("Erro ao aprovar estabelecimentos.");
+    } finally {
+      setActionInProgress(null);
+    }
+  }
+
+  // NOVA FUNÇÃO: Aprovar todas as avaliações de uma vez
+  async function approveAllReviews() {
+    if (!pendingRvs.length) {
+      alert("Não há avaliações para aprovar.");
+      return;
+    }
+    
+    if(!confirm(`Deseja aprovar todas as ${pendingRvs.length} avaliações pendentes?`)) return;
+    
+    setActionInProgress("approve-all-reviews");
+    
+    try {
+      const moderator = user?.email ?? "admin";
+      const { error } = await supabase
+        .from("reviews")
+        .update({ 
+          approved: true, 
+          moderated_by: moderator, 
+          moderated_at: new Date().toISOString() 
+        })
+        .in("id", pendingRvs.map(r => r.id));
+
+      if(error) throw error;
+
+      setPendingRvs([]);
+      alert(`✅ Aprovadas ${pendingRvs.length} avaliações.`);
+    } catch (error) {
+      console.error("Erro ao aprovar todas as avaliações:", error);
+      alert("Erro ao aprovar avaliações.");
+    } finally {
+      setActionInProgress(null);
+    }
+  }
+
   async function approveEst(pendingId: string){
     if (actionInProgress) return;
     setActionInProgress(`approve-est-${pendingId}`);
-    
-    if(!confirm("Deseja aprovar este estabelecimento?")) {
-      setActionInProgress(null);
-      return;
-    }
 
     try {
-      // 🔒 Verificação adicional via API
       const response = await fetch('/api/admin/approve-establishment', {
         method: 'POST',
         headers: {
@@ -200,8 +264,7 @@ export default function AdminPage() {
       const result = await response.json();
       
       if (result.success) {
-        alert("Estabelecimento aprovado com sucesso!");
-        await loadPending();
+        setPendingEsts(prev => prev.filter(p => p.id !== pendingId));
       } else {
         alert("Erro ao aprovar estabelecimento: " + (result.error || "Erro desconhecido"));
       }
@@ -213,17 +276,10 @@ export default function AdminPage() {
     }
   }
 
-  // 🔒 FUNÇÃO SEGURA PARA REJEITAR ESTABELECIMENTO
   async function rejectEst(pendingId: string){
     if (actionInProgress) return;
     setActionInProgress(`reject-est-${pendingId}`);
     
-    const reason = prompt("Motivo da rejeição (opcional):") || "Sem motivo especificado";
-    if (reason === null) {
-      setActionInProgress(null);
-      return; // Usuário cancelou
-    }
-
     if(!confirm("Deseja realmente rejeitar este estabelecimento?")) {
       setActionInProgress(null);
       return;
@@ -237,11 +293,7 @@ export default function AdminPage() {
 
       if(error) throw error;
 
-      // 🔒 Log da ação (em produção, salvar em tabela de logs)
-      console.log(`Estabelecimento ${pendingId} rejeitado por ${user.email}. Motivo: ${reason}`);
-      
-      alert("Estabelecimento rejeitado.");
-      await loadPending();
+      setPendingEsts(prev => prev.filter(p => p.id !== pendingId));
     } catch (error) {
       console.error("Erro ao rejeitar estabelecimento:", error);
       alert("Erro ao rejeitar estabelecimento. Tente novamente.");
@@ -250,15 +302,9 @@ export default function AdminPage() {
     }
   }
 
-  // 🔒 FUNÇÃO SEGURA PARA APROVAR AVALIAÇÃO
   async function approveReview(reviewId: string){
     if (actionInProgress) return;
     setActionInProgress(`approve-review-${reviewId}`);
-    
-    if(!confirm("Deseja aprovar esta avaliação?")) {
-      setActionInProgress(null);
-      return;
-    }
 
     try {
       const moderator = user?.email ?? "admin";
@@ -273,8 +319,7 @@ export default function AdminPage() {
 
       if(error) throw error;
 
-      alert("Avaliação aprovada.");
-      await loadPending();
+      setPendingRvs(prev => prev.filter(r => r.id !== reviewId));
     } catch (error) {
       console.error("Erro ao aprovar avaliação:", error);
       alert("Erro ao aprovar avaliação. Tente novamente.");
@@ -283,17 +328,10 @@ export default function AdminPage() {
     }
   }
 
-  // 🔒 FUNÇÃO SEGURA PARA REJEITAR AVALIAÇÃO
   async function rejectReview(reviewId: string){
     if (actionInProgress) return;
     setActionInProgress(`reject-review-${reviewId}`);
     
-    const reason = prompt("Motivo da rejeição:") || "Sem motivo especificado";
-    if (reason === null) {
-      setActionInProgress(null);
-      return;
-    }
-
     if(!confirm("Deseja realmente rejeitar esta avaliação?")) {
       setActionInProgress(null);
       return;
@@ -307,17 +345,114 @@ export default function AdminPage() {
           approved: false, 
           moderated_by: moderator, 
           moderated_at: new Date().toISOString(), 
-          moderator_note: reason 
+          moderator_note: "Rejeitado pelo admin" 
         })
         .eq("id", reviewId);
 
       if(error) throw error;
 
-      alert("Avaliação rejeitada.");
-      await loadPending();
+      setPendingRvs(prev => prev.filter(r => r.id !== reviewId));
     } catch (error) {
       console.error("Erro ao rejeitar avaliação:", error);
       alert("Erro ao rejeitar avaliação. Tente novamente.");
+    } finally {
+      setActionInProgress(null);
+    }
+  }
+
+  // FUNÇÃO: Buscar estabelecimentos
+  async function searchEstablishments() {
+    if (!searchTerm.trim()) {
+      alert("Digite um termo para buscar");
+      return;
+    }
+
+    setSearchLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("establishments")
+        .select("*")
+        .or(`name.ilike.%${searchTerm}%,address.ilike.%${searchTerm}%`)
+        .limit(20);
+
+      if (error) throw error;
+      setSearchResults(data || []);
+    } catch (error) {
+      console.error("Erro na busca:", error);
+      alert("Erro ao buscar estabelecimentos.");
+    } finally {
+      setSearchLoading(false);
+    }
+  }
+
+  // FUNÇÃO: Atualizar estabelecimento
+  async function updateEstablishment() {
+    if (!editingEst) return;
+
+    try {
+      const { error } = await supabase
+        .from("establishments")
+        .update({
+          name: editingEst.name,
+          address: editingEst.address,
+          has_water: editingEst.has_water,
+          has_bathroom: editingEst.has_bathroom,
+          has_power: editingEst.has_power,
+          lat: editingEst.lat,
+          lng: editingEst.lng
+        })
+        .eq("id", editingEst.id);
+
+      if (error) throw error;
+
+      alert("Estabelecimento atualizado com sucesso!");
+      setEditingEst(null);
+      await searchEstablishments(); // Atualiza os resultados da busca
+    } catch (error) {
+      console.error("Erro ao atualizar:", error);
+      alert("Erro ao atualizar estabelecimento.");
+    }
+  }
+
+  // NOVA FUNÇÃO: Deletar estabelecimento
+  async function deleteEstablishment(establishmentId: string) {
+    if (!establishmentId) return;
+    
+    if (!confirm("ATENÇÃO: Tem certeza que deseja deletar este estabelecimento?\n\nEsta ação é irreversível e também deletará todas as avaliações relacionadas a ele.")) {
+      return;
+    }
+
+    setActionInProgress(`delete-est-${establishmentId}`);
+    
+    try {
+      // Primeiro deleta as avaliações relacionadas
+      const { error: reviewsError } = await supabase
+        .from("reviews")
+        .delete()
+        .eq("establishment_id", establishmentId);
+
+      if (reviewsError) {
+        console.error("Erro ao deletar avaliações:", reviewsError);
+        // Continua mesmo com erro nas avaliações, tenta deletar o estabelecimento
+      }
+
+      // Depois deleta o estabelecimento
+      const { error } = await supabase
+        .from("establishments")
+        .delete()
+        .eq("id", establishmentId);
+
+      if (error) throw error;
+
+      alert("✅ Estabelecimento deletado com sucesso!");
+      
+      // Remove da lista de resultados
+      setSearchResults(prev => prev.filter(est => est.id !== establishmentId));
+      setEditingEst(null);
+      
+    } catch (error) {
+      console.error("Erro ao deletar estabelecimento:", error);
+      alert("Erro ao deletar estabelecimento.");
     } finally {
       setActionInProgress(null);
     }
@@ -398,20 +533,58 @@ export default function AdminPage() {
           Avaliações Pendentes ({pendingRvs.length})
         </button>
         <button 
-          onClick={loadPending} 
-          disabled={loading}
+          onClick={()=>setTab("search")} 
           style={{ 
-            marginLeft:"auto", 
-            padding: '12px 20px',
-            background: loading ? '#9ca3af' : '#3b82f6',
-            color: 'white',
-            border: 'none',
-            borderRadius: 8,
-            cursor: loading ? 'not-allowed' : 'pointer'
+            padding: '12px 20px', 
+            background: tab==="search" ? "#10b981" : "#6b7280", 
+            color:"#fff", 
+            border:"none", 
+            borderRadius:8,
+            cursor: 'pointer',
+            fontWeight: 'bold'
           }}
         >
-          {loading ? 'Carregando...' : 'Atualizar'}
+          Buscar/Editar Estabelecimentos
         </button>
+        
+        {/* Botões de aprovação em massa - aparecem apenas quando há itens */}
+        {tab === "establishments" && pendingEsts.length > 0 && (
+          <button 
+            onClick={approveAllEsts} 
+            disabled={actionInProgress === "approve-all-ests"}
+            style={{ 
+              marginLeft: 'auto',
+              padding: '12px 20px',
+              background: actionInProgress === "approve-all-ests" ? "#9ca3af" : "#10b981", 
+              color:"#fff", 
+              border:"none", 
+              borderRadius:8,
+              cursor: actionInProgress === "approve-all-ests" ? 'not-allowed' : 'pointer',
+              fontWeight: 'bold'
+            }}
+          >
+            {actionInProgress === "approve-all-ests" ? "Aprovando..." : `Aprovar Todos (${pendingEsts.length})`}
+          </button>
+        )}
+        
+        {tab === "reviews" && pendingRvs.length > 0 && (
+          <button 
+            onClick={approveAllReviews} 
+            disabled={actionInProgress === "approve-all-reviews"}
+            style={{ 
+              marginLeft: 'auto',
+              padding: '12px 20px',
+              background: actionInProgress === "approve-all-reviews" ? "#9ca3af" : "#10b981", 
+              color:"#fff", 
+              border:"none", 
+              borderRadius:8,
+              cursor: actionInProgress === "approve-all-reviews" ? 'not-allowed' : 'pointer',
+              fontWeight: 'bold'
+            }}
+          >
+            {actionInProgress === "approve-all-reviews" ? "Aprovando..." : `Aprovar Todas (${pendingRvs.length})`}
+          </button>
+        )}
       </div>
 
       <div style={{ marginTop:24 }}>
@@ -575,6 +748,190 @@ export default function AdminPage() {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {tab === "search" && (
+          <div>
+            <h3 style={{ marginBottom: 16 }}>Buscar e Editar Estabelecimentos</h3>
+            
+            <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>
+              <input
+                type="text"
+                placeholder="Buscar por nome ou endereço..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                style={{ 
+                  flex: 1, 
+                  padding: '10px 12px', 
+                  border: '1px solid #d1d5db', 
+                  borderRadius: 6 
+                }}
+                onKeyPress={(e) => e.key === 'Enter' && searchEstablishments()}
+              />
+              <button 
+                onClick={searchEstablishments} 
+                disabled={searchLoading}
+                style={{ 
+                  padding: '10px 20px', 
+                  background: searchLoading ? '#9ca3af' : '#3b82f6', 
+                  color: 'white', 
+                  border: 'none', 
+                  borderRadius: 6,
+                  cursor: searchLoading ? 'not-allowed' : 'pointer'
+                }}
+              >
+                {searchLoading ? 'Buscando...' : 'Buscar'}
+              </button>
+            </div>
+
+            {searchResults.length > 0 ? (
+              <div>
+                <h4>Resultados da Busca ({searchResults.length})</h4>
+                {searchResults.map(est => (
+                  <div key={est.id} style={{ 
+                    background: 'white', 
+                    padding: 16, 
+                    borderRadius: 8, 
+                    marginBottom: 12,
+                    border: '1px solid #e5e7eb',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+                  }}>
+                    {editingEst?.id === est.id ? (
+                      <div>
+                        <div style={{ marginBottom: 12 }}>
+                          <label style={{ display: 'block', marginBottom: 4 }}>Nome</label>
+                          <input
+                            type="text"
+                            value={editingEst.name}
+                            onChange={(e) => setEditingEst({...editingEst, name: e.target.value})}
+                            style={{ width: '100%', padding: '8px', border: '1px solid #d1d5db', borderRadius: 4 }}
+                          />
+                        </div>
+                        <div style={{ marginBottom: 12 }}>
+                          <label style={{ display: 'block', marginBottom: 4 }}>Endereço</label>
+                          <input
+                            type="text"
+                            value={editingEst.address}
+                            onChange={(e) => setEditingEst({...editingEst, address: e.target.value})}
+                            style={{ width: '100%', padding: '8px', border: '1px solid #d1d5db', borderRadius: 4 }}
+                          />
+                        </div>
+                        <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <input
+                              type="checkbox"
+                              checked={editingEst.has_water}
+                              onChange={(e) => setEditingEst({...editingEst, has_water: e.target.checked})}
+                            />
+                            💧 Água
+                          </label>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <input
+                              type="checkbox"
+                              checked={editingEst.has_bathroom}
+                              onChange={(e) => setEditingEst({...editingEst, has_bathroom: e.target.checked})}
+                            />
+                            🚻 Banheiro
+                          </label>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <input
+                              type="checkbox"
+                              checked={editingEst.has_power}
+                              onChange={(e) => setEditingEst({...editingEst, has_power: e.target.checked})}
+                            />
+                            🔌 Energia
+                          </label>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between' }}>
+                          <button 
+                            onClick={() => deleteEstablishment(editingEst.id)}
+                            disabled={actionInProgress === `delete-est-${editingEst.id}`}
+                            style={{ 
+                              padding: '8px 16px', 
+                              background: actionInProgress === `delete-est-${editingEst.id}` ? '#9ca3af' : '#ef4444', 
+                              color: 'white', 
+                              border: 'none', 
+                              borderRadius: 6,
+                              cursor: actionInProgress === `delete-est-${editingEst.id}` ? 'not-allowed' : 'pointer'
+                            }}
+                          >
+                            {actionInProgress === `delete-est-${editingEst.id}` ? 'Deletando...' : '🗑️ Deletar'}
+                          </button>
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <button 
+                              onClick={() => setEditingEst(null)}
+                              style={{ 
+                                padding: '8px 16px', 
+                                background: '#6b7280', 
+                                color: 'white', 
+                                border: 'none', 
+                                borderRadius: 6,
+                                cursor: 'pointer'
+                              }}
+                            >
+                              Cancelar
+                            </button>
+                            <button 
+                              onClick={updateEstablishment}
+                              style={{ 
+                                padding: '8px 16px', 
+                                background: '#10b981', 
+                                color: 'white', 
+                                border: 'none', 
+                                borderRadius: 6,
+                                cursor: 'pointer'
+                              }}
+                            >
+                              Salvar
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <div>
+                          <strong style={{ fontSize: 16, display: 'block', marginBottom: 8 }}>{est.name}</strong>
+                          <div style={{ fontSize: 14, color: '#6b7280', marginBottom: 4 }}>{est.address}</div>
+                          <div style={{ fontSize: 12, color: '#9ca3af' }}>
+                            Posição: {est.lat?.toFixed(6)}, {est.lng?.toFixed(6)} • 
+                            Criado em: {new Date(est.created_at).toLocaleString('pt-BR')}
+                          </div>
+                          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 8 }}>
+                            {est.has_water && '💧 '}
+                            {est.has_bathroom && '🚻 '}
+                            {est.has_power && '🔌 '}
+                          </div>
+                        </div>
+                        <button 
+                          onClick={() => setEditingEst(est)}
+                          style={{ 
+                            padding: '8px 16px', 
+                            background: '#3b82f6', 
+                            color: 'white', 
+                            border: 'none', 
+                            borderRadius: 6,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Editar
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : searchTerm && (
+              <div style={{ 
+                padding: 40, 
+                textAlign: 'center', 
+                color: '#6b7280',
+                background: '#f9fafb',
+                borderRadius: 8
+              }}>
+                Nenhum estabelecimento encontrado para "{searchTerm}"
+              </div>
+            )}
           </div>
         )}
       </div>

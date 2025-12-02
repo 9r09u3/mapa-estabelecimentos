@@ -1,22 +1,20 @@
-// app/api/admin/approve-establishment/route.ts
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-// 🔒 VALIDAÇÃO DAS VARIÁVEIS DE AMBIENTE
 if (!supabaseUrl || !supabaseServiceKey) {
   throw new Error("Variáveis de ambiente do Supabase não configuradas");
 }
 
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-export async function POST(req: Request) {
+export async function POST(request: NextRequest) {
   try {
-    const { pendingId, userEmail } = await req.json();
+    const body = await request.json();
+    const { pendingId, userEmail } = body;
     
-    // 🔒 VALIDAÇÃO RIGOROSA
     if (!pendingId || !userEmail) {
       return NextResponse.json({ 
         success: false, 
@@ -24,7 +22,6 @@ export async function POST(req: Request) {
       }, { status: 400 });
     }
 
-    // Validar UUID (se seu ID for UUID)
     if (!/^[0-9a-f-]+$/.test(pendingId)) {
       return NextResponse.json({ 
         success: false, 
@@ -32,7 +29,6 @@ export async function POST(req: Request) {
       }, { status: 400 });
     }
 
-    // 🔒 VERIFICAR SE USUÁRIO É ADMIN
     const adminEmails = process.env.ADMIN_EMAILS?.split(',').map(e => e.trim().toLowerCase()) || [];
     if (!adminEmails.includes(userEmail.toLowerCase())) {
       console.warn(`🚨 Tentativa de acesso não autorizado: ${userEmail}`);
@@ -42,7 +38,6 @@ export async function POST(req: Request) {
       }, { status: 403 });
     }
 
-    // 🔒 BUSCAR ESTABELECIMENTO PENDENTE COM VALIDAÇÃO
     const { data: pend, error: pendError } = await supabase
       .from("pending_establishments")
       .select("*")
@@ -57,7 +52,6 @@ export async function POST(req: Request) {
       }, { status: 404 });
     }
 
-    // 🔒 VALIDAR DADOS DO ESTABELECIMENTO
     if (!pend.name || pend.name.trim().length < 2) {
       return NextResponse.json({ 
         success: false, 
@@ -65,7 +59,6 @@ export async function POST(req: Request) {
       }, { status: 400 });
     }
 
-    // Validar coordenadas
     const lat = Number(pend.lat);
     const lng = Number(pend.lng);
     if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
@@ -75,7 +68,6 @@ export async function POST(req: Request) {
       }, { status: 400 });
     }
 
-    // 🔒 INSERIR COMO ESTABELECIMENTO APROVADO
     const { data: newEst, error: insertErr } = await supabase
       .from("establishments")
       .insert([{
@@ -98,7 +90,6 @@ export async function POST(req: Request) {
       }, { status: 500 });
     }
 
-    // 🔒 LINKAR REVIEWS ASSOCIADAS (se houver)
     const { data: matches } = await supabase
       .from("reviews")
       .select("*")
@@ -113,13 +104,11 @@ export async function POST(req: Request) {
       }
     }
 
-    // 🔒 REMOVER ESTABELECIMENTO PENDENTE
     await supabase
       .from("pending_establishments")
       .delete()
       .eq("id", pendingId);
 
-    // 🔒 LOG DA AÇÃO
     console.log(`✅ Estabelecimento aprovado: ${newEst.id} por ${userEmail}`);
 
     return NextResponse.json({ 
@@ -135,3 +124,5 @@ export async function POST(req: Request) {
     }, { status: 500 });
   }
 }
+
+export {};

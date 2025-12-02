@@ -46,6 +46,8 @@ interface Filters {
   has_water: boolean;
   has_bathroom: boolean;
   has_power: boolean;
+  show_evaluated: boolean;
+  show_unevaluated: boolean;
 }
 
 interface ReviewFormData {
@@ -98,11 +100,20 @@ export default function Page() {
 
   const [searchQuery, setSearchQuery] = useState("");
   const [suggestions, setSuggestions] = useState<Establishment[]>([]);
+  const [searchExpanded, setSearchExpanded] = useState(false);
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
 
-  const [filters, setFilters] = useState<Filters>({ has_water: false, has_bathroom: false, has_power: false });
+  const [filters, setFilters] = useState<Filters>({ 
+    has_water: false, 
+    has_bathroom: false, 
+    has_power: false,
+    show_evaluated: true,
+    show_unevaluated: false
+  });
+  
   const [reviewTarget, setReviewTarget] = useState<string | null>(null);
-
   const [selectedEstablishment, setSelectedEstablishment] = useState<Establishment | null>(null);
+  const [searchResultEstablishment, setSearchResultEstablishment] = useState<Establishment | null>(null);
 
   async function loadAll() {
     try {
@@ -147,6 +158,7 @@ export default function Page() {
     const q = (searchQuery || "").trim().toLowerCase();
     if (!q) {
       setSuggestions([]);
+      setSearchResultEstablishment(null);
       return;
     }
 
@@ -160,6 +172,10 @@ export default function Page() {
     setTab("map");
     setSearchQuery("");
     setSuggestions([]);
+    setSearchExpanded(false);
+    
+    // Mostrar o estabelecimento encontrado mesmo se filtros não permitirem
+    setSearchResultEstablishment(establishment);
     
     setTimeout(() => {
       setSelectedEstablishment(establishment);
@@ -175,6 +191,23 @@ export default function Page() {
       return () => clearTimeout(timer);
     }
   }, [selectedEstablishment]);
+
+  // Limpar estabelecimento da busca quando clicar em outro lugar
+  const handleMapClick = useCallback((position: Position) => {
+    setSelectedPoint(position);
+    setSearchResultEstablishment(null); // Limpar resultado da busca
+    // NÃO seta addMode como true aqui - só abre popup no mapa
+  }, []);
+
+  const handleOpenAddModal = () => {
+    if (!selectedPoint) return;
+    setAddMode(true);
+  };
+
+  const handleCloseAddModal = () => {
+    setAddMode(false);
+    setSelectedPoint(null);
+  };
 
   const submitPendingEstablishmentAndOptionalReview = async (
     name: string, 
@@ -265,6 +298,8 @@ export default function Page() {
 
       setSelectedPoint(null);
       setAddMode(false);
+      // Recarregar dados para atualizar lista
+      loadAll();
       
     } catch (error: any) {
       console.error("Erro detalhado no processo:", error);
@@ -315,6 +350,8 @@ export default function Page() {
       console.log("Review enviada com sucesso!");
       alert("Avaliação enviada para moderação!");
       setReviewTarget(null);
+      // Recarregar dados para atualizar contagem de avaliações
+      loadAll();
       
     } catch (error: any) {
       console.error("Erro inesperado:", error);
@@ -324,6 +361,15 @@ export default function Page() {
 
   function getFilteredList(): Establishment[] {
     let list = establishments.slice();
+    
+    if (filters.show_evaluated && !filters.show_unevaluated) {
+      list = list.filter(e => e.reviews_count > 0);
+    } else if (!filters.show_evaluated && filters.show_unevaluated) {
+      list = list.filter(e => e.reviews_count === 0);
+    } else if (!filters.show_evaluated && !filters.show_unevaluated) {
+      list = [];
+    }
+    
     if (filters.has_water) list = list.filter(e => e.has_water);
     if (filters.has_bathroom) list = list.filter(e => e.has_bathroom);
     if (filters.has_power) list = list.filter(e => e.has_power);
@@ -336,6 +382,18 @@ export default function Page() {
     return list;
   }
 
+  // Lista para o mapa: filtros normais + estabelecimento da busca (se existir)
+  function getMapEstablishments(): Establishment[] {
+    const filteredList = getFilteredList();
+    
+    // Se temos um resultado de busca específico, adiciona ele à lista mesmo se não passar nos filtros
+    if (searchResultEstablishment && !filteredList.some(e => e.id === searchResultEstablishment.id)) {
+      return [...filteredList, searchResultEstablishment];
+    }
+    
+    return filteredList;
+  }
+
   const rankingMapped = [...establishments]
     .map(e => ({ ...e, sortScore: e.final_score ?? 999 }))
     .sort((a, b) => a.sortScore - b.sortScore);
@@ -344,122 +402,262 @@ export default function Page() {
     <div style={{ height: "100vh", width: "100%", position: "relative" }}>
       {tab === "map" && (
         <>
-          <div style={{ position: "absolute", top: 12, left: 12, zIndex: 1000, background: "white", borderRadius: 12, padding: 16, boxShadow: "0 4px 12px rgba(0,0,0,0.15)", width: 340, maxHeight: "90vh", overflow: "auto" }}>
-            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-              <input
-                style={{ 
-                  flex: 1, 
-                  padding: "10px 12px", 
-                  border: "1px solid #ddd", 
-                  borderRadius: 8, 
-                  fontSize: 14,
-                  outline: "none"
-                }}
-                placeholder="Buscar estabelecimento..."
-                value={searchQuery}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchQuery(e.target.value)}
-              />
+          {/* Barra superior esquerda com ícones */}
+          <div style={{ 
+            position: "absolute", 
+            top: 12, 
+            left: 12, 
+            zIndex: 1000, 
+            display: "flex", 
+            gap: 8,
+            flexDirection: "column",
+            alignItems: "flex-start"
+          }}>
+            {/* Botão de busca */}
+            <div style={{ 
+              background: "white", 
+              borderRadius: 12, 
+              boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+              overflow: "hidden",
+              width: searchExpanded ? 280 : 48,
+              transition: "width 0.3s ease",
+              display: "flex",
+              alignItems: "center"
+            }}>
+              {searchExpanded && (
+                <div style={{ flex: 1, padding: "0 12px" }}>
+                  <input
+                    style={{ 
+                      width: "100%", 
+                      padding: "10px 0", 
+                      border: "none", 
+                      fontSize: 14,
+                      outline: "none",
+                      background: "transparent"
+                    }}
+                    placeholder="Buscar estabelecimento..."
+                    value={searchQuery}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchQuery(e.target.value)}
+                    autoFocus
+                  />
+                </div>
+              )}
               <button
                 onClick={() => {
-                  if (!searchQuery.trim()) return;
-                  const first = suggestions[0];
-                  if (first) handleSuggestionClick(first);
+                  setSearchExpanded(!searchExpanded);
+                  if (searchExpanded) {
+                    setSearchQuery("");
+                    setSuggestions([]);
+                    setSearchResultEstablishment(null);
+                  }
                 }}
                 style={{ 
-                  padding: "10px 12px", 
-                  borderRadius: 8, 
-                  border: "none", 
-                  background: "#ff8c42", 
-                  color: "white", 
-                  cursor: "pointer"
-                }}
-              >
-                🔍
-              </button>
-            </div>
-
-            {suggestions.length > 0 && (
-              <div style={{ marginBottom: 12, border: "1px solid #e5e7eb", borderRadius: 8, overflow: "hidden" }}>
-                {suggestions.map((s: Establishment) => (
-                  <div
-                    key={s.id}
-                    onClick={() => handleSuggestionClick(s)}
-                    style={{ 
-                      padding: "12px", 
-                      cursor: "pointer", 
-                      borderBottom: "1px solid #f3f4f6",
-                      transition: "background-color 0.2s"
-                    }}
-                    onMouseEnter={(e: React.MouseEvent<HTMLDivElement>) => {
-                      e.currentTarget.style.backgroundColor = "#f9fafb";
-                    }}
-                    onMouseLeave={(e: React.MouseEvent<HTMLDivElement>) => {
-                      e.currentTarget.style.backgroundColor = "white";
-                    }}
-                  >
-                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>{s.name}</div>
-                    <div style={{ fontSize: 12, color: "#6b7280" }}>{s.address}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div style={{ marginBottom: 16 }}>
-              <button
-                style={{ 
-                  width: "100%", 
                   padding: "12px", 
-                  borderRadius: 10, 
+                  background: "transparent", 
                   border: "none", 
-                  background: "#ff8c42", 
-                  color: "white", 
-                  fontWeight: "bold",
-                  cursor: "pointer"
+                  cursor: "pointer",
+                  minWidth: 48,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center"
                 }}
-                onClick={() => setAddMode(true)}
               >
-                ➕ Adicionar estabelecimento
+                {searchExpanded ? "✕" : "🔍"}
               </button>
             </div>
 
-            <div style={{ borderTop: "1px solid #e5e7eb", paddingTop: 16 }}>
-              <h4 style={{ marginBottom: 12, fontSize: 16, fontWeight: "bold" }}>Filtros</h4>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, cursor: "pointer" }}>
-                  <input 
-                    type="checkbox" 
-                    checked={filters.has_water}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFilters(f => ({ ...f, has_water: e.target.checked }))} 
-                  /> 
-                  💧 Água
-                </label>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, cursor: "pointer" }}>
-                  <input 
-                    type="checkbox" 
-                    checked={filters.has_bathroom}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFilters(f => ({ ...f, has_bathroom: e.target.checked }))} 
-                  /> 
-                  🚻 Banheiro
-                </label>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, cursor: "pointer" }}>
-                  <input 
-                    type="checkbox" 
-                    checked={filters.has_power}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFilters(f => ({ ...f, has_power: e.target.checked }))} 
-                  /> 
-                  🔌 Tomada
-                </label>
-              </div>
-            </div>
+            {/* Botão de filtros */}
+            <button
+              onClick={() => setFiltersExpanded(!filtersExpanded)}
+              style={{ 
+                padding: "12px", 
+                background: "white", 
+                borderRadius: 12, 
+                border: "none", 
+                boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+                cursor: "pointer",
+                minWidth: 48,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center"
+              }}
+            >
+              ⚙️
+            </button>
           </div>
 
+          {/* Painel de filtros expansível */}
+          {filtersExpanded && (
+            <div style={{ 
+              position: "absolute", 
+              top: 12, 
+              left: 12, 
+              zIndex: 1001, // Z-index maior para ficar na frente
+              background: "white", 
+              borderRadius: 12, 
+              padding: 16, 
+              boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+              width: 220,
+              maxHeight: "calc(100vh - 100px)",
+              overflow: "auto"
+            }}>
+              {/* Botão X para fechar */}
+              <button
+                onClick={() => setFiltersExpanded(false)}
+                style={{
+                  position: "absolute",
+                  top: 8,
+                  right: 8,
+                  background: "transparent",
+                  border: "none",
+                  fontSize: 18,
+                  cursor: "pointer",
+                  color: "#6b7280",
+                  width: 24,
+                  height: 24,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  borderRadius: "50%",
+                  transition: "background-color 0.2s"
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#f3f4f6"}
+                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "transparent"}
+              >
+                ×
+              </button>
+
+              <h4 style={{ marginBottom: 12, fontSize: 16, fontWeight: "bold", paddingRight: 24 }}>Filtros</h4>
+              
+              {/* Filtros de avaliação */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, color: "#374151" }}>Avaliação</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, cursor: "pointer" }}>
+                    <input 
+                      type="checkbox" 
+                      checked={filters.show_evaluated}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFilters(f => ({ ...f, show_evaluated: e.target.checked }))} 
+                    /> 
+                    📝 Com avaliações
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, cursor: "pointer" }}>
+                    <input 
+                      type="checkbox" 
+                      checked={filters.show_unevaluated}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFilters(f => ({ ...f, show_unevaluated: e.target.checked }))} 
+                    /> 
+                    🆕 Sem avaliações
+                  </label>
+                </div>
+              </div>
+
+              {/* Filtros de infraestrutura */}
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, color: "#374151" }}>Infraestrutura</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, cursor: "pointer" }}>
+                    <input 
+                      type="checkbox" 
+                      checked={filters.has_water}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFilters(f => ({ ...f, has_water: e.target.checked }))} 
+                    /> 
+                    💧 Água
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, cursor: "pointer" }}>
+                    <input 
+                      type="checkbox" 
+                      checked={filters.has_bathroom}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFilters(f => ({ ...f, has_bathroom: e.target.checked }))} 
+                    /> 
+                    🚻 Banheiro
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, cursor: "pointer" }}>
+                    <input 
+                      type="checkbox" 
+                      checked={filters.has_power}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFilters(f => ({ ...f, has_power: e.target.checked }))} 
+                    /> 
+                    🔌 Tomada
+                  </label>
+                </div>
+              </div>
+
+              {/* Botão para limpar filtros */}
+              <button
+                onClick={() => setFilters({ 
+                  has_water: false, 
+                  has_bathroom: false, 
+                  has_power: false,
+                  show_evaluated: true,
+                  show_unevaluated: false
+                })}
+                style={{
+                  width: "100%",
+                  padding: "8px",
+                  marginTop: 16,
+                  background: "#f3f4f6",
+                  color: "#374151",
+                  border: "1px solid #d1d5db",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  fontSize: 14
+                }}
+              >
+                Limpar filtros
+              </button>
+            </div>
+          )}
+
+          {/* Sugestões de busca */}
+          {searchExpanded && suggestions.length > 0 && (
+            <div style={{ 
+              position: "absolute", 
+              top: 70, 
+              left: 12, 
+              zIndex: 1000, 
+              background: "white", 
+              borderRadius: 12, 
+              boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+              width: 280,
+              maxHeight: "300px",
+              overflow: "auto"
+            }}>
+              {suggestions.map((s: Establishment) => (
+                <div
+                  key={s.id}
+                  onClick={() => handleSuggestionClick(s)}
+                  style={{ 
+                    padding: "12px", 
+                    cursor: "pointer", 
+                    borderBottom: "1px solid #f3f4f6",
+                    transition: "background-color 0.2s"
+                  }}
+                  onMouseEnter={(e: React.MouseEvent<HTMLDivElement>) => {
+                    e.currentTarget.style.backgroundColor = "#f9fafb";
+                  }}
+                  onMouseLeave={(e: React.MouseEvent<HTMLDivElement>) => {
+                    e.currentTarget.style.backgroundColor = "white";
+                  }}
+                >
+                  <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>{s.name}</div>
+                  <div style={{ fontSize: 12, color: "#6b7280" }}>{s.address}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Mapa */}
           <LeafletMap
-            establishments={getFilteredList()}
+            establishments={getMapEstablishments()} // Usa a nova função
             selectedPoint={selectedPoint}
-            onMapClick={(pos: Position) => setSelectedPoint(pos)}
+            onMapClick={handleMapClick}
             onRequestReview={(id: string) => setReviewTarget(id)}
             selectedEstablishment={selectedEstablishment}
             onEstablishmentOpened={() => setSelectedEstablishment(null)}
+            showAddModal={addMode}
+            onCloseAddModal={handleCloseAddModal}
+            onSubmitAddModal={submitPendingEstablishmentAndOptionalReview}
           />
         </>
       )}
@@ -467,37 +665,6 @@ export default function Page() {
       {tab === "ranking" && <RankingList establishments={rankingMapped} reviews={reviews} />}
 
       <TabBar active={tab} onChange={(newTab: "map" | "ranking") => setTab(newTab)} />
-
-      {addMode && (
-        <div style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: "rgba(0,0,0,0.5)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          zIndex: 2000
-        }} onClick={() => setAddMode(false)}>
-          <div style={{
-            background: "white",
-            borderRadius: 12,
-            padding: 24,
-            maxWidth: 500,
-            width: "90%",
-            maxHeight: "90vh",
-            overflow: "auto"
-          }} onClick={(e: React.MouseEvent<HTMLDivElement>) => e.stopPropagation()}>
-            <AddEstablishmentModal
-              clickedPos={selectedPoint}
-              onCancel={() => setAddMode(false)}
-              onConfirm={submitPendingEstablishmentAndOptionalReview}
-            />
-          </div>
-        </div>
-      )}
 
       <ReviewPanel
         targetId={reviewTarget}

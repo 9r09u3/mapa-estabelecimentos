@@ -5,6 +5,7 @@ import { MapContainer, TileLayer, Marker, Popup, useMapEvents, useMap } from "re
 import MarkerClusterGroup from "react-leaflet-cluster";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import AddEstablishmentModal from "./AddEstablishmentModal";
 
 interface Position {
   lat: number;
@@ -32,11 +33,22 @@ interface LeafletMapProps {
   onRequestReview?: (id: string) => void;
   selectedEstablishment?: Establishment | null;
   onEstablishmentOpened?: () => void;
+  showAddModal?: boolean;
+  onCloseAddModal?: () => void;
+  onSubmitAddModal?: (
+    name: string, 
+    address: string, 
+    flags: { has_water: boolean; has_bathroom: boolean; has_power: boolean }, 
+    wantToReview: boolean, 
+    reviewData?: any
+  ) => Promise<void>;
 }
 
 interface MapControllerProps {
   selectedEstablishment?: Establishment | null;
   onEstablishmentOpened?: () => void;
+  selectedPoint?: Position | null;
+  onOpenAddModal?: () => void;
 }
 
 interface MapClickHandlerProps {
@@ -52,7 +64,12 @@ if (typeof window !== "undefined") {
   });
 }
 
-function MapController({ selectedEstablishment, onEstablishmentOpened }: MapControllerProps) {
+function MapController({ 
+  selectedEstablishment, 
+  onEstablishmentOpened,
+  selectedPoint,
+  onOpenAddModal 
+}: MapControllerProps) {
   const map = useMap();
   const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
 
@@ -156,11 +173,71 @@ function MapController({ selectedEstablishment, onEstablishmentOpened }: MapCont
       .openOn(map);
   };
 
+  // Criar popup para adicionar estabelecimento
+  const createAddEstablishmentPopup = useCallback(() => {
+    if (!selectedPoint) return;
+
+    const popupContent = `
+      <div style="min-width: 240px; font-family: system-ui, sans-serif;">
+        <div style="text-align: center; margin-bottom: 16px;">
+          <div style="font-size: 18px; font-weight: 700; color: #374151; margin-bottom: 4px;">Adicionar Estabelecimento</div>
+          <div style="font-size: 12px; color: #6b7280;">Clique no botão abaixo para adicionar um novo estabelecimento nesta localização</div>
+        </div>
+        
+        <button 
+          onclick="window.dispatchEvent(new CustomEvent('openAddModal'))"
+          style="
+            padding: 12px 16px;
+            background: #ff8c42;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 700;
+            width: 100%;
+            cursor: pointer;
+            font-size: 14px;
+            margin-bottom: 8px;
+          "
+        >
+          ➕ Adicionar Estabelecimento
+        </button>
+        
+        <button 
+          onclick="window.dispatchEvent(new CustomEvent('closeAddPopup'))"
+          style="
+            padding: 12px 16px;
+            background: #f3f4f6;
+            color: #374151;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            font-weight: 600;
+            width: 100%;
+            cursor: pointer;
+            font-size: 14px;
+          "
+        >
+          Cancelar
+        </button>
+      </div>
+    `;
+
+    L.popup()
+      .setLatLng([selectedPoint.lat, selectedPoint.lng])
+      .setContent(popupContent)
+      .openOn(map);
+  }, [map, selectedPoint]);
+
   useEffect(() => {
     if (selectedEstablishment) {
       openEstablishmentPopup(selectedEstablishment);
     }
   }, [selectedEstablishment, openEstablishmentPopup]);
+
+  useEffect(() => {
+    if (selectedPoint) {
+      createAddEstablishmentPopup();
+    }
+  }, [selectedPoint, createAddEstablishmentPopup]);
 
   return null;
 }
@@ -213,6 +290,9 @@ interface RequestReviewEvent extends CustomEvent {
   detail: string;
 }
 
+interface OpenAddModalEvent extends CustomEvent {}
+interface CloseAddPopupEvent extends CustomEvent {}
+
 export default function LeafletMap({
   establishments = [],
   selectedPoint,
@@ -220,10 +300,13 @@ export default function LeafletMap({
   onRequestReview,
   selectedEstablishment,
   onEstablishmentOpened,
+  showAddModal = false,
+  onCloseAddModal,
+  onSubmitAddModal,
 }: LeafletMapProps) {
   const mapRef = useRef<L.Map | null>(null);
-  const [tempMarker, setTempMarker] = useState<Position | null>(selectedPoint ?? null);
   const [isMapReady, setIsMapReady] = useState(false);
+  const [localShowAddModal, setLocalShowAddModal] = useState(false);
 
   useEffect(() => {
     const handleReviewRequest = (event: Event) => {
@@ -231,16 +314,34 @@ export default function LeafletMap({
       onRequestReview?.(customEvent.detail);
     };
 
+    const handleOpenAddModal = (event: Event) => {
+      event.preventDefault();
+      setLocalShowAddModal(true);
+    };
+
+    const handleCloseAddPopup = (event: Event) => {
+      event.preventDefault();
+      if (mapRef.current) {
+        mapRef.current.closePopup();
+      }
+      onCloseAddModal?.();
+    };
+
     window.addEventListener('requestReview', handleReviewRequest);
+    window.addEventListener('openAddModal', handleOpenAddModal);
+    window.addEventListener('closeAddPopup', handleCloseAddPopup);
     
     return () => {
       window.removeEventListener('requestReview', handleReviewRequest);
+      window.removeEventListener('openAddModal', handleOpenAddModal);
+      window.removeEventListener('closeAddPopup', handleCloseAddPopup);
     };
-  }, [onRequestReview]);
+  }, [onRequestReview, onCloseAddModal]);
 
+  // Resetar o modal local quando o prop showAddModal mudar
   useEffect(() => {
-    setTempMarker(selectedPoint ?? null);
-  }, [selectedPoint]);
+    setLocalShowAddModal(showAddModal);
+  }, [showAddModal]);
 
   useEffect(() => {
     if (isMapReady && mapRef.current) {
@@ -255,7 +356,7 @@ export default function LeafletMap({
     iconCreateFunction: function (cluster: any) {
       const count = cluster.getChildCount();
       const size = count < 10 ? 34 : count < 100 ? 42 : 52;
-      const color = "#ff8c42";
+      const color = "#bbbbbbff";
       const html = `<div style="
         background:${color};
         width:${size}px;
@@ -294,130 +395,181 @@ export default function LeafletMap({
     return null;
   };
 
+  const handleCloseModal = () => {
+    setLocalShowAddModal(false);
+    onCloseAddModal?.();
+    if (mapRef.current) {
+      mapRef.current.closePopup();
+    }
+  };
+
+  const handleConfirmModal = async (
+    name: string, 
+    address: string, 
+    flags: { has_water: boolean; has_bathroom: boolean; has_power: boolean }, 
+    wantToReview: boolean, 
+    reviewData?: any
+  ) => {
+    if (onSubmitAddModal) {
+      await onSubmitAddModal(name, address, flags, wantToReview, reviewData);
+      setLocalShowAddModal(false);
+      if (mapRef.current) {
+        mapRef.current.closePopup();
+      }
+    }
+  };
+
   return (
-    <MapContainer
-      center={[-16.6869, -49.2648]}
-      zoom={13}
-      style={{ height: "100vh", width: "100%" }}
-      zoomControl={false}
-      ref={mapRef}
-    >
-      <TileLayer
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-      />
+    <>
+      <MapContainer
+        center={[-16.6869, -49.2648]}
+        zoom={13}
+        style={{ height: "100vh", width: "100%" }}
+        zoomControl={false}
+        ref={mapRef}
+      >
+        <TileLayer
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        />
 
-      <MapReadyHandler />
+        <MapReadyHandler />
 
-      <MapClickHandler onMapClick={onMapClick} />
-      
-      <MapController 
-        selectedEstablishment={selectedEstablishment} 
-        onEstablishmentOpened={onEstablishmentOpened}
-      />
+        <MapClickHandler onMapClick={onMapClick} />
+        
+        <MapController 
+          selectedEstablishment={selectedEstablishment} 
+          onEstablishmentOpened={onEstablishmentOpened}
+          selectedPoint={selectedPoint}
+        />
 
-      <div className="leaflet-top leaflet-right">
-        <div className="leaflet-control-zoom leaflet-bar leaflet-control">
-          <a 
-            className="leaflet-control-zoom-in" 
-            href="#" 
-            title="Zoom in"
-            onClick={(e: React.MouseEvent<HTMLAnchorElement>) => {
-              e.preventDefault();
-              mapRef.current?.zoomIn();
-            }}
-          >
-            +
-          </a>
-          <a 
-            className="leaflet-control-zoom-out" 
-            href="#" 
-            title="Zoom out"
-            onClick={(e: React.MouseEvent<HTMLAnchorElement>) => {
-              e.preventDefault();
-              mapRef.current?.zoomOut();
-            }}
-          >
-            −
-          </a>
-        </div>
-      </div>
-
-      {tempMarker && (
-        <Marker
-          position={[tempMarker.lat, tempMarker.lng]}
-          icon={createDivIcon("#f59e0b", "📍", 32)}
-        >
-          <Popup>
-            <div style={{ padding: 8 }}>
-              <strong>Local selecionado</strong>
-              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-                Clique em "Adicionar estabelecimento" para cadastrar este local
-              </div>
-            </div>
-          </Popup>
-        </Marker>
-      )}
-
-      <MarkerClusterGroup {...clusterOptions}>
-        {establishments.map((establishment: Establishment) => {
-          const { id, lat, lng, name, address, final_score, reviews_count, has_water, has_bathroom, has_power } = establishment;
-          
-          if (!lat || !lng || isNaN(lat) || isNaN(lng)) return null;
-
-          const color = colorByScore(final_score);
-          const markerIcon = createDivIcon(color, final_score ? final_score.toFixed(1) : "?", 32);
-
-          const facilities = [
-            has_water ? "💧 Água" : "",
-            has_bathroom ? "🚻 Banheiro" : "",
-            has_power ? "🔌 Tomada" : "",
-          ].filter(Boolean).join(" • ") || "Sem infraestrutura registrada";
-
-          return (
-            <Marker
-              key={id}
-              position={[lat, lng]}
-              icon={markerIcon}
-              data-establishment-id={id}
+        <div className="leaflet-top leaflet-right">
+          <div className="leaflet-control-zoom leaflet-bar leaflet-control">
+            <a 
+              className="leaflet-control-zoom-in" 
+              href="#" 
+              title="Zoom in"
+              onClick={(e: React.MouseEvent<HTMLAnchorElement>) => {
+                e.preventDefault();
+                mapRef.current?.zoomIn();
+              }}
             >
-              <Popup>
-                <div style={{ minWidth: 240, fontFamily: "system-ui, sans-serif" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 12 }}>
-                    <div style={{ flex: 1 }}>
-                      <strong style={{ fontSize: 16, display: "block", marginBottom: 4 }}>{name}</strong>
-                      <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 8 }}>{address}</div>
+              +
+            </a>
+            <a 
+              className="leaflet-control-zoom-out" 
+              href="#" 
+              title="Zoom out"
+              onClick={(e: React.MouseEvent<HTMLAnchorElement>) => {
+                e.preventDefault();
+                mapRef.current?.zoomOut();
+              }}
+            >
+              −
+            </a>
+          </div>
+        </div>
+
+        {/* Marcador temporário para posição selecionada */}
+        {selectedPoint && (
+          <Marker
+            position={[selectedPoint.lat, selectedPoint.lng]}
+            icon={createDivIcon("#f59e0b", "📍", 32)}
+          />
+        )}
+
+        <MarkerClusterGroup {...clusterOptions}>
+          {establishments.map((establishment: Establishment) => {
+            const { id, lat, lng, name, address, final_score, reviews_count, has_water, has_bathroom, has_power } = establishment;
+            
+            if (!lat || !lng || isNaN(lat) || isNaN(lng)) return null;
+
+            const color = colorByScore(final_score);
+            const markerIcon = createDivIcon(color, final_score ? final_score.toFixed(1) : "?", 32);
+
+            const facilities = [
+              has_water ? "💧 Água" : "",
+              has_bathroom ? "🚻 Banheiro" : "",
+              has_power ? "🔌 Tomada" : "",
+            ].filter(Boolean).join(" • ") || "Sem infraestrutura registrada";
+
+            return (
+              <Marker
+                key={id}
+                position={[lat, lng]}
+                icon={markerIcon}
+                data-establishment-id={id}
+              >
+                <Popup>
+                  <div style={{ minWidth: 240, fontFamily: "system-ui, sans-serif" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 12 }}>
+                      <div style={{ flex: 1 }}>
+                        <strong style={{ fontSize: 16, display: "block", marginBottom: 4 }}>{name}</strong>
+                        <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 8 }}>{address}</div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontWeight: 700, fontSize: 18 }}>{final_score ? final_score.toFixed(1) : "—"}</div>
+                        <div style={{ fontSize: 11, color: "#6b7280" }}>{reviews_count || 0} avaliações</div>
+                      </div>
                     </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ fontWeight: 700, fontSize: 18 }}>{final_score ? final_score.toFixed(1) : "—"}</div>
-                      <div style={{ fontSize: 11, color: "#6b7280" }}>{reviews_count || 0} avaliações</div>
-                    </div>
+
+                    <div style={{ fontSize: 14, color: "#555", marginBottom: 12 }}>{facilities}</div>
+
+                    <button
+                      onClick={() => onRequestReview?.(id)}
+                      style={{
+                        padding: "10px 16px",
+                        background: "#ff8c42",
+                        color: "white",
+                        border: "none",
+                        borderRadius: 8,
+                        fontWeight: 700,
+                        width: "100%",
+                        cursor: "pointer",
+                        fontSize: 14
+                      }}
+                    >
+                      📝 Avaliar este local
+                    </button>
                   </div>
+                </Popup>
+              </Marker>
+            );
+          })}
+        </MarkerClusterGroup>
+      </MapContainer>
 
-                  <div style={{ fontSize: 14, color: "#555", marginBottom: 12 }}>{facilities}</div>
-
-                  <button
-                    onClick={() => onRequestReview?.(id)}
-                    style={{
-                      padding: "10px 16px",
-                      background: "#ff8c42",
-                      color: "white",
-                      border: "none",
-                      borderRadius: 8,
-                      fontWeight: 700,
-                      width: "100%",
-                      cursor: "pointer",
-                      fontSize: 14
-                    }}
-                  >
-                    📝 Avaliar este local
-                  </button>
-                </div>
-              </Popup>
-            </Marker>
-          );
-        })}
-      </MarkerClusterGroup>
-    </MapContainer>
+      {/* Modal para adicionar estabelecimento - SÓ ABRE QUANDO localShowAddModal É true */}
+      {localShowAddModal && selectedPoint && (
+        <div style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: "rgba(0,0,0,0.5)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          zIndex: 2000
+        }} onClick={handleCloseModal}>
+          <div style={{
+            background: "white",
+            borderRadius: 12,
+            padding: 24,
+            maxWidth: 500,
+            width: "90%",
+            maxHeight: "90vh",
+            overflow: "auto"
+          }} onClick={(e: React.MouseEvent<HTMLDivElement>) => e.stopPropagation()}>
+            <AddEstablishmentModal
+              clickedPos={selectedPoint}
+              onCancel={handleCloseModal}
+              onConfirm={handleConfirmModal}
+            />
+          </div>
+        </div>
+      )}
+    </>
   );
 }
