@@ -147,12 +147,41 @@ export default function Page() {
 
   async function loadAll() {
     try {
-      const [{ data: estData, error: estError }, { data: revData, error: revError }] = await Promise.all([
-        supabase.from("establishments").select("*"),
-        supabase.from("reviews").select("*").eq("approved", true)
-      ]);
+      // Buscar estabelecimentos com paginação
+      let allEstData: any[] = [];
+      let page = 0;
+      const pageSize = 1000; // Tamanho da página
+      let hasMore = true;
 
-      if (estError) throw estError;
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from("establishments")
+          .select("*")
+          .range(page * pageSize, (page + 1) * pageSize - 1);
+
+        if (error) throw error;
+
+        if (data && data.length > 0) {
+          allEstData = [...allEstData, ...data];
+          page++;
+          
+          // Se retornou menos que pageSize, é a última página
+          if (data.length < pageSize) {
+            hasMore = false;
+          }
+        } else {
+          hasMore = false;
+        }
+      }
+
+      console.log(`📊 Total estabelecimentos carregados: ${allEstData.length}`);
+
+      // Resto do código permanece igual, usando allEstData em vez de estData
+      const { data: revData, error: revError } = await supabase
+        .from("reviews")
+        .select("*")
+        .eq("approved", true);
+
       if (revError) throw revError;
 
       const revs = revData || [];
@@ -168,7 +197,7 @@ export default function Page() {
         byCount[r.establishment_id] = (byCount[r.establishment_id] || 0) + 1;
       }
 
-      const enriched = (estData || []).map((e: any) => {
+      const enriched = allEstData.map((e: any) => {
         const arr = byId[e.id] || [];
         const avg = arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
         return { ...e, final_score: avg, reviews_count: byCount[e.id] || 0 };
@@ -176,6 +205,15 @@ export default function Page() {
 
       setEstablishments(enriched);
       setLastUpdate(Date.now());
+      
+      // Log para verificar novos estabelecimentos
+      const newEstablishments = enriched.filter(e => {
+        const createdAt = new Date(e.created_at);
+        const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        return createdAt > oneWeekAgo;
+      });
+      console.log(`🆕 Estabelecimentos dos últimos 7 dias: ${newEstablishments.length}`);
+      
     } catch (error) {
       console.error("Erro ao carregar dados:", error);
     }
